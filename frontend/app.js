@@ -4,7 +4,18 @@ let currentImageData = null;
 let selectedFile = null;
 
 async function generateImage() {
+
+    const accessCode = document.getElementById("accessCode").value.trim();
+    const captcha = document.getElementById("captchaInput").value.trim();
     const prompt = document.getElementById("prompt").value.trim();
+    if (!accessCode) {
+        showError("请输入访问口令");
+        return;
+    }
+    if (!captcha) {
+        showError("请输入验证码");
+        return;
+    }
     if (!prompt) {
         showError("请输入图片描述");
         return;
@@ -23,8 +34,11 @@ async function generateImage() {
     try {
         const requestOptions = { method: "POST" };
 
+
         if (selectedFile) {
             const formData = new FormData();
+            formData.append("access_code", accessCode);
+            formData.append("captcha", captcha);
             formData.append("prompt", prompt);
             formData.append("size", size);
             formData.append("quality", quality);
@@ -32,7 +46,7 @@ async function generateImage() {
             requestOptions.body = formData;
         } else {
             requestOptions.headers = { "Content-Type": "application/json" };
-            requestOptions.body = JSON.stringify({ prompt, size, quality });
+            requestOptions.body = JSON.stringify({ access_code: accessCode, captcha, prompt, size, quality });
         }
 
         const resp = await fetch(`${API_BASE}/api/generate`, requestOptions);
@@ -49,6 +63,7 @@ async function generateImage() {
         showResult();
     } catch (err) {
         showError(err.message);
+        refreshCaptcha();
     } finally {
         hideLoading();
         btn.disabled = false;
@@ -124,3 +139,8 @@ document.getElementById("prompt").addEventListener("keydown", (e) => {
 });
 
 document.getElementById("imageInput").addEventListener("change", handleImageSelected);
+
+function refreshCaptcha() {
+    const img = document.getElementById("captchaImg");
+    img.src = "/api/captcha?_=" + Date.now();
+}

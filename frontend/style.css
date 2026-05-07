@@ -24,6 +24,51 @@ body {
     width: 100%;
     max-width: 640px;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    box-sizing: border-box;
+}
+
+@media (max-width: 600px) {
+    .container {
+        padding: 16px;
+        border-radius: 10px;
+        max-width: 100vw;
+    }
+    h1 {
+        font-size: 1.2rem;
+    }
+    .form-row {
+        flex-direction: column;
+        gap: 0;
+    }
+    .options-row {
+        flex-direction: column;
+        gap: 0;
+    }
+    .preview img {
+        max-height: 120px;
+    }
+}
+
+.form-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 18px;
+}
+
+.captcha-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.captcha-img {
+    height: 38px;
+    width: 90px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    background: #fff;
+    cursor: pointer;
+    object-fit: cover;
+    margin-left: 4px;
 }
 
 h1 {
