@@ -18,6 +18,14 @@ DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-image-2").strip()
 API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "").strip()
 AZURE_STORAGE_CONNECTION_STRING = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "").strip()
 AZURE_STORAGE_CONTAINER = os.environ.get("AZURE_STORAGE_CONTAINER", "").strip()
+AZURE_STORAGE_CONTAINER_GENERATED = os.environ.get(
+    "AZURE_STORAGE_CONTAINER_GENERATED",
+    AZURE_STORAGE_CONTAINER,
+).strip()
+AZURE_STORAGE_CONTAINER_REFERENCE = os.environ.get(
+    "AZURE_STORAGE_CONTAINER_REFERENCE",
+    AZURE_STORAGE_CONTAINER,
+).strip()
 
 logger.info("Starting Flask app...")
 logger.info(f"Using endpoint: {ENDPOINT}")
@@ -72,11 +80,13 @@ def _extract_image_bytes(result):
 
 
 def _upload_to_blob(image_bytes: bytes):
-    if not AZURE_STORAGE_CONNECTION_STRING or not AZURE_STORAGE_CONTAINER:
-        raise RuntimeError("请配置 AZURE_STORAGE_CONNECTION_STRING 和 AZURE_STORAGE_CONTAINER")
+    if not AZURE_STORAGE_CONNECTION_STRING or not AZURE_STORAGE_CONTAINER_GENERATED:
+        raise RuntimeError(
+            "请配置 AZURE_STORAGE_CONNECTION_STRING 和 AZURE_STORAGE_CONTAINER_GENERATED"
+        )
 
     blob_service = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
-    container_client = blob_service.get_container_client(AZURE_STORAGE_CONTAINER)
+    container_client = blob_service.get_container_client(AZURE_STORAGE_CONTAINER_GENERATED)
     if not container_client.exists():
         container_client.create_container()
 
@@ -95,7 +105,7 @@ def _upload_to_blob(image_bytes: bytes):
     if account_name and account_key:
         sas = generate_blob_sas(
             account_name=account_name,
-            container_name=AZURE_STORAGE_CONTAINER,
+            container_name=AZURE_STORAGE_CONTAINER_GENERATED,
             blob_name=blob_name,
             account_key=account_key,
             permission=BlobSasPermissions(read=True),
@@ -107,11 +117,13 @@ def _upload_to_blob(image_bytes: bytes):
 
 
 def _upload_reference_to_blob(image_bytes: bytes):
-    if not AZURE_STORAGE_CONNECTION_STRING or not AZURE_STORAGE_CONTAINER:
-        raise RuntimeError("请配置 AZURE_STORAGE_CONNECTION_STRING 和 AZURE_STORAGE_CONTAINER")
+    if not AZURE_STORAGE_CONNECTION_STRING or not AZURE_STORAGE_CONTAINER_REFERENCE:
+        raise RuntimeError(
+            "请配置 AZURE_STORAGE_CONNECTION_STRING 和 AZURE_STORAGE_CONTAINER_REFERENCE"
+        )
 
     blob_service = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
-    container_client = blob_service.get_container_client(AZURE_STORAGE_CONTAINER)
+    container_client = blob_service.get_container_client(AZURE_STORAGE_CONTAINER_REFERENCE)
     if not container_client.exists():
         container_client.create_container()
 
@@ -131,7 +143,7 @@ def _upload_reference_to_blob(image_bytes: bytes):
     if account_name and account_key:
         sas = generate_blob_sas(
             account_name=account_name,
-            container_name=AZURE_STORAGE_CONTAINER,
+            container_name=AZURE_STORAGE_CONTAINER_REFERENCE,
             blob_name=blob_name,
             account_key=account_key,
             permission=BlobSasPermissions(read=True),
