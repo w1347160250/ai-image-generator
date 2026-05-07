@@ -4,3 +4,4 @@ openai
 requests
 pillow
 itsdangerous
+gunicorn
