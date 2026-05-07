@@ -9,17 +9,16 @@ from openai import OpenAI
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
-logger.info("Starting Flask app...")
-logger.info(f"Using endpoint: {ENDPOINT}")
-logger.info(f"Using deployment: {DEPLOYMENT}")
-logger.info("Flask app initialized.")
-
-app = Flask(__name__, static_folder="../frontend", static_url_path="")
-CORS(app)
-
 ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "").strip()
 DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-image-2").strip()
 API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "").strip()
+
+logger.info("Starting Flask app...")
+logger.info(f"Using endpoint: {ENDPOINT}")
+logger.info(f"Using deployment: {DEPLOYMENT}")
+
+app = Flask(__name__, static_folder="../frontend", static_url_path="")
+CORS(app)
 
 missing_settings = []
 if not ENDPOINT:
