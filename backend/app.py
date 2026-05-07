@@ -195,14 +195,14 @@ def _generate_with_optional_reference(prompt, size, quality, reference_bytes, re
                 "size": size,
                 "quality": quality,
                 "n": 1,
-                "input_image": reference_url,
+                "image_url": reference_url,
             },
             {
                 "prompt": prompt,
                 "size": size,
                 "quality": quality,
                 "n": 1,
-                "image_url": reference_url,
+                "image": reference_url,
             },
         ]
         for api_version in api_versions:
@@ -233,15 +233,10 @@ def _generate_with_optional_reference(prompt, size, quality, reference_bytes, re
                         "URL-based generation attempt failed. "
                         f"deployment={DEPLOYMENT}, attempt={attempt_error}"
                     )
-
         if url_attempt_errors:
-            first_error = url_attempt_errors[0]
-            raise RuntimeError(
-                "参考图 URL 生图失败。"
-                f"reference_url={reference_url}, "
-                f"api_version={first_error['api_version']}, "
-                f"status={first_error['status']}, "
-                f"response={first_error['response']}"
+            logger.warning(
+                "All URL-based attempts failed; switching to edit fallback. "
+                f"deployment={DEPLOYMENT}, reference_url={reference_url}, attempts={url_attempt_errors}"
             )
 
     # URL 流程失败后，回退到编辑接口（字节流）保证兼容性。
@@ -288,8 +283,8 @@ def _generate_with_optional_reference(prompt, size, quality, reference_bytes, re
         f"deployment={DEPLOYMENT}, status={resp.status_code}, error={err_text}"
     )
     raise RuntimeError(
-        "参考图生图失败：当前部署可能不支持编辑，或部署名不是图片编辑部署名。"
-        f"（deployment={DEPLOYMENT}, status={resp.status_code}）"
+        "参考图生图失败：URL 参考方式和编辑方式均失败。"
+        f"（deployment={DEPLOYMENT}, status={resp.status_code}, reference_url={reference_url}）"
     )
 
 
