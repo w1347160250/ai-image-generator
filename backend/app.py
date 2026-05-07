@@ -1,12 +1,7 @@
 import base64
 import os
 import logging
-import io
-import random
-import string
 import requests
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
-from flask import session, send_file
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from openai import OpenAI
@@ -26,40 +21,8 @@ logger.info(f"Using deployment: {DEPLOYMENT}")
 app = Flask(__name__, static_folder="../frontend", static_url_path="")
 CORS(app)
 
-# 配置 session
-app.secret_key = os.environ.get("SESSION_SECRET", "change_this_secret")
-
 # 口令配置（可用环境变量管理）
 ACCESS_CODE = os.environ.get("ACCESS_CODE", "ai2026")
-
-# 验证码工具
-def _generate_captcha_text(length=5):
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
-
-def _generate_captcha_image(text):
-    width, height = 110, 38
-    image = Image.new('RGB', (width, height), (255, 255, 255))
-    font = ImageFont.load_default()
-    draw = ImageDraw.Draw(image)
-    for i in range(random.randint(1, 3)):
-        draw.line(
-            [(random.randint(0, width), random.randint(0, height)),
-              (random.randint(0, width), random.randint(0, height))],
-            fill=(random.randint(100, 200), random.randint(100, 200), random.randint(100, 200)), width=2)
-    for i, char in enumerate(text):
-        draw.text((10 + i * 18, random.randint(2, 10)), char, font=font, fill=(random.randint(0, 120), random.randint(0, 120), random.randint(0, 120)))
-    image = image.filter(ImageFilter.SMOOTH)
-    buf = io.BytesIO()
-    image.save(buf, format='PNG')
-    buf.seek(0)
-    return buf
-
-@app.route("/api/captcha")
-def get_captcha():
-    text = _generate_captcha_text()
-    session['captcha'] = text.lower()
-    img = _generate_captcha_image(text)
-    return send_file(img, mimetype='image/png')
 
 missing_settings = []
 if not ENDPOINT:
@@ -177,13 +140,6 @@ def generate_image():
     access_code = getf("access_code", "").strip()
     if not access_code or access_code != ACCESS_CODE:
         return jsonify({"error": "访问口令错误"}), 403
-
-    # 校验验证码
-    captcha = getf("captcha", "").strip().lower()
-    if not captcha or captcha != session.get('captcha', '').lower():
-        session['captcha'] = None
-        return jsonify({"error": "验证码错误，请刷新重试"}), 403
-    session['captcha'] = None
 
     prompt = getf("prompt", "").strip()
     size = getf("size", "1024x1024")
