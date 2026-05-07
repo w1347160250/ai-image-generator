@@ -1,10 +1,13 @@
 import base64
 import os
 import logging
+import uuid
+from datetime import datetime, timedelta
 import requests
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from openai import OpenAI
+from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -13,6 +16,8 @@ logger = logging.getLogger("app")
 ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "").strip()
 DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-image-2").strip()
 API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "").strip()
+AZURE_STORAGE_CONNECTION_STRING = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "").strip()
+AZURE_STORAGE_CONTAINER = os.environ.get("AZURE_STORAGE_CONTAINER", "").strip()
 
 logger.info("Starting Flask app...")
 logger.info(f"Using endpoint: {ENDPOINT}")
@@ -36,6 +41,69 @@ if missing_settings:
     )
 
 client = OpenAI(base_url=ENDPOINT, api_key=API_KEY)
+
+
+def _extract_from_connection_string(connection_string: str):
+    parts = {}
+    for item in connection_string.split(";"):
+        if "=" in item:
+            k, v = item.split("=", 1)
+            parts[k] = v
+    return parts
+
+
+def _extract_image_bytes(result):
+    if not getattr(result, "data", None):
+        raise RuntimeError("模型返回为空")
+    first = result.data[0]
+
+    b64_data = getattr(first, "b64_json", None)
+    if b64_data:
+        return base64.b64decode(b64_data)
+
+    image_url = getattr(first, "url", None)
+    if image_url:
+        resp = requests.get(image_url, timeout=60)
+        if not resp.ok:
+            raise RuntimeError(f"下载模型图片失败: status={resp.status_code}")
+        return resp.content
+
+    raise RuntimeError("模型未返回 b64_json 或 url")
+
+
+def _upload_to_blob(image_bytes: bytes):
+    if not AZURE_STORAGE_CONNECTION_STRING or not AZURE_STORAGE_CONTAINER:
+        raise RuntimeError("请配置 AZURE_STORAGE_CONNECTION_STRING 和 AZURE_STORAGE_CONTAINER")
+
+    blob_service = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+    container_client = blob_service.get_container_client(AZURE_STORAGE_CONTAINER)
+    if not container_client.exists():
+        container_client.create_container()
+
+    blob_name = f"generated/{datetime.utcnow().strftime('%Y%m%d')}/{uuid.uuid4().hex}.png"
+    blob_client = container_client.get_blob_client(blob_name)
+    blob_client.upload_blob(
+        image_bytes,
+        overwrite=True,
+        content_settings=ContentSettings(content_type="image/png"),
+    )
+
+    account_info = _extract_from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+    account_name = account_info.get("AccountName")
+    account_key = account_info.get("AccountKey")
+
+    if account_name and account_key:
+        sas = generate_blob_sas(
+            account_name=account_name,
+            container_name=AZURE_STORAGE_CONTAINER,
+            blob_name=blob_name,
+            account_key=account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=datetime.utcnow() + timedelta(days=30),
+        )
+        return f"{blob_client.url}?{sas}"
+
+    return blob_client.url
 
 
 def _get_azure_resource_endpoint(raw_endpoint: str) -> str:
@@ -169,8 +237,9 @@ def generate_image():
 
     try:
         result = _generate_with_optional_reference(prompt, size, quality, reference_bytes)
-        b64_image = result.data[0].b64_json
-        return jsonify({"image": b64_image})
+        image_bytes = _extract_image_bytes(result)
+        blob_url = _upload_to_blob(image_bytes)
+        return jsonify({"image_url": blob_url})
     except RuntimeError as re:
         return jsonify({"error": str(re)}), 400
     except Exception as e:

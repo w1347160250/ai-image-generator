@@ -1,6 +1,6 @@
 const API_BASE = "";
 
-let currentImageData = null;
+let currentImageUrl = null;
 let selectedFile = null;
 
 async function generateImage() {
@@ -51,9 +51,9 @@ async function generateImage() {
             throw new Error(data.error || "生成失败");
         }
 
-        currentImageData = data.image;
+        currentImageUrl = data.image_url;
         const img = document.getElementById("resultImage");
-        img.src = `data:image/png;base64,${data.image}`;
+        img.src = data.image_url;
         showResult();
     } catch (err) {
         showError(err.message);
@@ -94,9 +94,9 @@ function clearSelectedImage() {
 }
 
 function downloadImage() {
-    if (!currentImageData) return;
+    if (!currentImageUrl) return;
     const link = document.createElement("a");
-    link.href = `data:image/png;base64,${currentImageData}`;
+    link.href = currentImageUrl;
     const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     link.download = `ai-image-${ts}.png`;
     link.click();
