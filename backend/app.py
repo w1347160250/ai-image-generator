@@ -183,14 +183,12 @@ def _generate_with_optional_reference(prompt, size, quality, reference_bytes, re
     # 先尝试 URL 参考图生图（适配 image-2 URL 参考流程）。
     if reference_url:
         resource_endpoint = _get_azure_resource_endpoint(ENDPOINT)
-        gen_url = (
-            f"{resource_endpoint}/openai/deployments/{DEPLOYMENT}/images/generations"
-            f"?api-version=2024-02-01"
-        )
         headers = {
             "api-key": API_KEY,
             "Content-Type": "application/json",
         }
+        api_versions = ["2025-04-01-preview", "2024-02-01"]
+        url_attempt_errors = []
         payload_candidates = [
             {
                 "prompt": prompt,
@@ -207,22 +205,44 @@ def _generate_with_optional_reference(prompt, size, quality, reference_bytes, re
                 "image_url": reference_url,
             },
         ]
-        for payload in payload_candidates:
-            resp = requests.post(gen_url, headers=headers, json=payload, timeout=60)
-            if resp.ok:
-                body = resp.json()
-                if body.get("data"):
-                    if body["data"][0].get("b64_json"):
-                        return _wrap_b64_result(body["data"][0]["b64_json"])
-                    if body["data"][0].get("url"):
-                        image_resp = requests.get(body["data"][0]["url"], timeout=60)
-                        if image_resp.ok:
-                            return _wrap_b64_result(base64.b64encode(image_resp.content).decode("utf-8"))
-            else:
-                logger.warning(
-                    "URL-based generation attempt failed. "
-                    f"deployment={DEPLOYMENT}, status={resp.status_code}, response={resp.text}"
-                )
+        for api_version in api_versions:
+            gen_url = (
+                f"{resource_endpoint}/openai/deployments/{DEPLOYMENT}/images/generations"
+                f"?api-version={api_version}"
+            )
+            for payload in payload_candidates:
+                resp = requests.post(gen_url, headers=headers, json=payload, timeout=60)
+                if resp.ok:
+                    body = resp.json()
+                    if body.get("data"):
+                        if body["data"][0].get("b64_json"):
+                            return _wrap_b64_result(body["data"][0]["b64_json"])
+                        if body["data"][0].get("url"):
+                            image_resp = requests.get(body["data"][0]["url"], timeout=60)
+                            if image_resp.ok:
+                                return _wrap_b64_result(base64.b64encode(image_resp.content).decode("utf-8"))
+                else:
+                    attempt_error = {
+                        "api_version": api_version,
+                        "payload_keys": list(payload.keys()),
+                        "status": resp.status_code,
+                        "response": resp.text,
+                    }
+                    url_attempt_errors.append(attempt_error)
+                    logger.warning(
+                        "URL-based generation attempt failed. "
+                        f"deployment={DEPLOYMENT}, attempt={attempt_error}"
+                    )
+
+        if url_attempt_errors:
+            first_error = url_attempt_errors[0]
+            raise RuntimeError(
+                "参考图 URL 生图失败。"
+                f"reference_url={reference_url}, "
+                f"api_version={first_error['api_version']}, "
+                f"status={first_error['status']}, "
+                f"response={first_error['response']}"
+            )
 
     # URL 流程失败后，回退到编辑接口（字节流）保证兼容性。
     try:
@@ -335,9 +355,9 @@ def generate_image():
         blob_url = _upload_to_blob(image_bytes)
         return jsonify({"image_url": blob_url, "reference_url": reference_url})
     except RuntimeError as re:
-        return jsonify({"error": str(re)}), 400
+        return jsonify({"error": str(re), "reference_url": reference_url}), 400
     except Exception as e:
-        return jsonify({"error": f"生成失败: {str(e)}"}), 500
+        return jsonify({"error": f"生成失败: {str(e)}", "reference_url": reference_url}), 500
 
 
 if __name__ == "__main__":
