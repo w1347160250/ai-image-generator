@@ -106,6 +106,42 @@ def _upload_to_blob(image_bytes: bytes):
     return blob_client.url
 
 
+def _upload_reference_to_blob(image_bytes: bytes):
+    if not AZURE_STORAGE_CONNECTION_STRING or not AZURE_STORAGE_CONTAINER:
+        raise RuntimeError("请配置 AZURE_STORAGE_CONNECTION_STRING 和 AZURE_STORAGE_CONTAINER")
+
+    blob_service = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+    container_client = blob_service.get_container_client(AZURE_STORAGE_CONTAINER)
+    if not container_client.exists():
+        container_client.create_container()
+
+    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    blob_name = f"reference/{datetime.utcnow().strftime('%Y%m%d')}/{ts}-{uuid.uuid4().hex}.png"
+    blob_client = container_client.get_blob_client(blob_name)
+    blob_client.upload_blob(
+        image_bytes,
+        overwrite=True,
+        content_settings=ContentSettings(content_type="image/png"),
+    )
+
+    account_info = _extract_from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+    account_name = account_info.get("AccountName")
+    account_key = account_info.get("AccountKey")
+
+    if account_name and account_key:
+        sas = generate_blob_sas(
+            account_name=account_name,
+            container_name=AZURE_STORAGE_CONTAINER,
+            blob_name=blob_name,
+            account_key=account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=datetime.utcnow() + timedelta(hours=2),
+        )
+        return f"{blob_client.url}?{sas}"
+
+    return blob_client.url
+
+
 def _get_azure_resource_endpoint(raw_endpoint: str) -> str:
     ep = raw_endpoint.strip().rstrip("/")
     if ep.endswith("/openai/v1"):
@@ -122,7 +158,7 @@ def _wrap_b64_result(b64_value: str):
     return dummy
 
 
-def _generate_with_optional_reference(prompt, size, quality, reference_bytes):
+def _generate_with_optional_reference(prompt, size, quality, reference_bytes, reference_url=None):
     if not reference_bytes:
         return client.images.generate(
             model=DEPLOYMENT,
@@ -132,7 +168,51 @@ def _generate_with_optional_reference(prompt, size, quality, reference_bytes):
             quality=quality,
         )
 
-    # 参考图模式：使用官方 SDK 的 edit 接口，避免手动拼接 Azure REST 路径导致 404。
+    # 先尝试 URL 参考图生图（适配 image-2 URL 参考流程）。
+    if reference_url:
+        resource_endpoint = _get_azure_resource_endpoint(ENDPOINT)
+        gen_url = (
+            f"{resource_endpoint}/openai/deployments/{DEPLOYMENT}/images/generations"
+            f"?api-version=2024-02-01"
+        )
+        headers = {
+            "api-key": API_KEY,
+            "Content-Type": "application/json",
+        }
+        payload_candidates = [
+            {
+                "prompt": prompt,
+                "size": size,
+                "quality": quality,
+                "n": 1,
+                "input_image": reference_url,
+            },
+            {
+                "prompt": prompt,
+                "size": size,
+                "quality": quality,
+                "n": 1,
+                "image_url": reference_url,
+            },
+        ]
+        for payload in payload_candidates:
+            resp = requests.post(gen_url, headers=headers, json=payload, timeout=60)
+            if resp.ok:
+                body = resp.json()
+                if body.get("data"):
+                    if body["data"][0].get("b64_json"):
+                        return _wrap_b64_result(body["data"][0]["b64_json"])
+                    if body["data"][0].get("url"):
+                        image_resp = requests.get(body["data"][0]["url"], timeout=60)
+                        if image_resp.ok:
+                            return _wrap_b64_result(base64.b64encode(image_resp.content).decode("utf-8"))
+            else:
+                logger.warning(
+                    "URL-based generation attempt failed. "
+                    f"deployment={DEPLOYMENT}, status={resp.status_code}, response={resp.text}"
+                )
+
+    # URL 流程失败后，回退到编辑接口（字节流）保证兼容性。
     try:
         return client.images.edit(
             model=DEPLOYMENT,
@@ -224,6 +304,7 @@ def generate_image():
         return jsonify({"error": f"不支持的质量，可选: {', '.join(allowed_qualities)}"}), 400
 
     reference_bytes = None
+    reference_url = None
     if is_multipart and "image" in request.files:
         image_file = request.files["image"]
         if image_file.filename:
@@ -234,12 +315,13 @@ def generate_image():
                 return jsonify({"error": "上传的参考图为空"}), 400
             if len(reference_bytes) > 10 * 1024 * 1024:
                 return jsonify({"error": "参考图不能超过 10MB"}), 400
+            reference_url = _upload_reference_to_blob(reference_bytes)
 
     try:
-        result = _generate_with_optional_reference(prompt, size, quality, reference_bytes)
+        result = _generate_with_optional_reference(prompt, size, quality, reference_bytes, reference_url)
         image_bytes = _extract_image_bytes(result)
         blob_url = _upload_to_blob(image_bytes)
-        return jsonify({"image_url": blob_url})
+        return jsonify({"image_url": blob_url, "reference_url": reference_url})
     except RuntimeError as re:
         return jsonify({"error": str(re)}), 400
     except Exception as e:
