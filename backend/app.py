@@ -34,6 +34,38 @@ if missing_settings:
 client = OpenAI(base_url=ENDPOINT, api_key=API_KEY)
 
 
+def _generate_with_optional_reference(prompt, size, quality, reference_bytes):
+    if not reference_bytes:
+        return client.images.generate(
+            model=DEPLOYMENT,
+            prompt=prompt,
+            n=1,
+            size=size,
+            quality=quality,
+        )
+
+    # Try edit API first for image+prompt flow, then fallback to generate with input_image.
+    try:
+        return client.images.edit(
+            model=DEPLOYMENT,
+            image=reference_bytes,
+            prompt=prompt,
+            n=1,
+            size=size,
+        )
+    except Exception as edit_error:
+        logger.warning(f"images.edit failed, fallback to images.generate: {edit_error}")
+        image_b64 = base64.b64encode(reference_bytes).decode("utf-8")
+        return client.images.generate(
+            model=DEPLOYMENT,
+            prompt=prompt,
+            n=1,
+            size=size,
+            quality=quality,
+            input_image=image_b64,
+        )
+
+
 @app.route("/")
 def index():
     return send_from_directory(app.static_folder, "index.html")
@@ -47,13 +79,22 @@ def health_check():
 
 @app.route("/api/generate", methods=["POST"])
 def generate_image():
-    data = request.get_json()
-    if not data or not data.get("prompt", "").strip():
-        return jsonify({"error": "请输入图片描述"}), 400
+    is_multipart = (request.content_type or "").startswith("multipart/form-data")
 
-    prompt = data["prompt"].strip()
-    size = data.get("size", "1024x1024")
-    quality = data.get("quality", "low")
+    if is_multipart:
+        prompt = (request.form.get("prompt", "") or "").strip()
+        size = (request.form.get("size", "1024x1024") or "1024x1024").strip()
+        quality = (request.form.get("quality", "low") or "low").strip()
+    else:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "请求格式错误"}), 400
+        prompt = (data.get("prompt", "") or "").strip()
+        size = data.get("size", "1024x1024")
+        quality = data.get("quality", "low")
+
+    if not prompt:
+        return jsonify({"error": "请输入图片描述"}), 400
 
     allowed_sizes = {"1024x1024", "1024x1536", "1536x1024"}
     allowed_qualities = {"low", "medium", "high"}
@@ -63,14 +104,20 @@ def generate_image():
     if quality not in allowed_qualities:
         return jsonify({"error": f"不支持的质量，可选: {', '.join(allowed_qualities)}"}), 400
 
+    reference_bytes = None
+    if is_multipart and "image" in request.files:
+        image_file = request.files["image"]
+        if image_file.filename:
+            if not (image_file.mimetype or "").startswith("image/"):
+                return jsonify({"error": "参考图必须是图片文件"}), 400
+            reference_bytes = image_file.read()
+            if not reference_bytes:
+                return jsonify({"error": "上传的参考图为空"}), 400
+            if len(reference_bytes) > 10 * 1024 * 1024:
+                return jsonify({"error": "参考图不能超过 10MB"}), 400
+
     try:
-        result = client.images.generate(
-            model=DEPLOYMENT,
-            prompt=prompt,
-            n=1,
-            size=size,
-            quality=quality,
-        )
+        result = _generate_with_optional_reference(prompt, size, quality, reference_bytes)
         b64_image = result.data[0].b64_json
         return jsonify({"image": b64_image})
     except Exception as e:

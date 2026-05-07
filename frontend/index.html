@@ -16,6 +16,17 @@
             <textarea id="prompt" rows="3" placeholder="例如：一只戴着墨镜的柴犬在海边冲浪"></textarea>
         </div>
 
+        <div class="form-group">
+            <label for="imageInput">参考图片（可选）</label>
+            <input id="imageInput" type="file" accept="image/*">
+            <p class="field-tip">上传后会结合这张图片和你的描述一起生成。</p>
+        </div>
+
+        <div id="previewArea" class="preview hidden">
+            <img id="previewImage" alt="参考图片预览">
+            <button id="clearImageBtn" type="button" class="ghost-btn" onclick="clearSelectedImage()">移除参考图</button>
+        </div>
+
         <div class="options-row">
             <div class="form-group">
                 <label for="size">尺寸</label>

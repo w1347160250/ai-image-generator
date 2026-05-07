@@ -1,6 +1,7 @@
 const API_BASE = "";
 
 let currentImageData = null;
+let selectedFile = null;
 
 async function generateImage() {
     const prompt = document.getElementById("prompt").value.trim();
@@ -20,11 +21,21 @@ async function generateImage() {
     btn.textContent = "生成中...";
 
     try {
-        const resp = await fetch(`${API_BASE}/api/generate`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prompt, size, quality }),
-        });
+        const requestOptions = { method: "POST" };
+
+        if (selectedFile) {
+            const formData = new FormData();
+            formData.append("prompt", prompt);
+            formData.append("size", size);
+            formData.append("quality", quality);
+            formData.append("image", selectedFile);
+            requestOptions.body = formData;
+        } else {
+            requestOptions.headers = { "Content-Type": "application/json" };
+            requestOptions.body = JSON.stringify({ prompt, size, quality });
+        }
+
+        const resp = await fetch(`${API_BASE}/api/generate`, requestOptions);
 
         const data = await resp.json();
 
@@ -43,6 +54,35 @@ async function generateImage() {
         btn.disabled = false;
         btn.textContent = "生成图片";
     }
+}
+
+function handleImageSelected(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) {
+        clearSelectedImage();
+        return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+        showError("请上传图片文件");
+        clearSelectedImage();
+        return;
+    }
+
+    selectedFile = file;
+    const reader = new FileReader();
+    reader.onload = () => {
+        document.getElementById("previewImage").src = reader.result;
+        document.getElementById("previewArea").classList.remove("hidden");
+    };
+    reader.readAsDataURL(file);
+}
+
+function clearSelectedImage() {
+    selectedFile = null;
+    document.getElementById("imageInput").value = "";
+    document.getElementById("previewImage").src = "";
+    document.getElementById("previewArea").classList.add("hidden");
 }
 
 function downloadImage() {
@@ -82,3 +122,5 @@ document.getElementById("prompt").addEventListener("keydown", (e) => {
         generateImage();
     }
 });
+
+document.getElementById("imageInput").addEventListener("change", handleImageSelected);

@@ -68,6 +68,52 @@ textarea:focus, select:focus {
     border-color: #7c5cfc;
 }
 
+input[type="file"] {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px dashed rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.06);
+    color: #e8e8e8;
+}
+
+.field-tip {
+    margin-top: 8px;
+    color: #b6b6d8;
+    font-size: 0.85rem;
+}
+
+.preview {
+    margin-bottom: 18px;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.preview img {
+    width: 100%;
+    max-height: 240px;
+    object-fit: contain;
+    border-radius: 10px;
+    margin-bottom: 10px;
+    background: rgba(0, 0, 0, 0.25);
+}
+
+.ghost-btn {
+    width: 100%;
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.08);
+    color: #f0f0f0;
+    cursor: pointer;
+}
+
+.ghost-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+}
+
 .options-row {
     display: flex;
     gap: 16px;
