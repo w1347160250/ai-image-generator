@@ -1,6 +1,7 @@
 import base64
 import os
 import logging
+import requests
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from openai import OpenAI
@@ -44,26 +45,44 @@ def _generate_with_optional_reference(prompt, size, quality, reference_bytes):
             quality=quality,
         )
 
-    # Try edit API first for image+prompt flow, then fallback to generate with input_image.
-    try:
-        return client.images.edit(
-            model=DEPLOYMENT,
-            image=reference_bytes,
-            prompt=prompt,
-            n=1,
-            size=size,
-        )
-    except Exception as edit_error:
-        logger.warning(f"images.edit failed, fallback to images.generate: {edit_error}")
-        image_b64 = base64.b64encode(reference_bytes).decode("utf-8")
-        return client.images.generate(
-            model=DEPLOYMENT,
-            prompt=prompt,
-            n=1,
-            size=size,
-            quality=quality,
-            input_image=image_b64,
-        )
+    # 参考图模式，直接用 requests 调 REST API
+    endpoint_url = ENDPOINT.rstrip("/") + f"/openai/images/generations:submit?api-version=2023-12-01-preview"
+    headers = {
+        "api-key": API_KEY,
+        "Content-Type": "application/json"
+    }
+    image_b64 = base64.b64encode(reference_bytes).decode("utf-8")
+    payload = {
+        "model": DEPLOYMENT,
+        "prompt": prompt,
+        "n": 1,
+        "size": size,
+        "quality": quality,
+        "input_image": image_b64
+    }
+    resp = requests.post(endpoint_url, headers=headers, json=payload)
+    if resp.status_code != 200:
+        logger.error(f"Azure OpenAI REST API error: {resp.text}")
+        raise RuntimeError(f"参考图生图失败: {resp.text}")
+    # 兼容异步任务API，需轮询获取结果
+    result_url = resp.json().get("resultUrl")
+    if not result_url:
+        raise RuntimeError("Azure API 未返回 resultUrl")
+    # 轮询直到生成完成
+    for _ in range(30):
+        r = requests.get(result_url, headers=headers)
+        if r.status_code == 200:
+            result = r.json()
+            if result.get("status") == "succeeded":
+                class Dummy:
+                    pass
+                dummy = Dummy()
+                dummy.data = [type("Obj", (), {"b64_json": result["data"][0]["b64_json"]})()]
+                return dummy
+            elif result.get("status") == "failed":
+                raise RuntimeError(f"Azure生成失败: {result}")
+        import time; time.sleep(2)
+    raise RuntimeError("Azure生成超时，请稍后重试")
 
 
 @app.route("/")
@@ -120,6 +139,8 @@ def generate_image():
         result = _generate_with_optional_reference(prompt, size, quality, reference_bytes)
         b64_image = result.data[0].b64_json
         return jsonify({"image": b64_image})
+    except RuntimeError as re:
+        return jsonify({"error": str(re)}), 400
     except Exception as e:
         return jsonify({"error": f"生成失败: {str(e)}"}), 500
 
