@@ -6,8 +6,6 @@ import random
 import string
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from flask import session, send_file
-from itsdangerous import URLSafeTimedSerializer
-import requests
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from openai import OpenAI
@@ -86,44 +84,21 @@ def _generate_with_optional_reference(prompt, size, quality, reference_bytes):
             quality=quality,
         )
 
-    # 参考图模式，直接用 requests 调 REST API
-    endpoint_url = ENDPOINT.rstrip("/") + f"/openai/images/generations:submit?api-version=2023-12-01-preview"
-    headers = {
-        "api-key": API_KEY,
-        "Content-Type": "application/json"
-    }
-    image_b64 = base64.b64encode(reference_bytes).decode("utf-8")
-    payload = {
-        "model": DEPLOYMENT,
-        "prompt": prompt,
-        "n": 1,
-        "size": size,
-        "quality": quality,
-        "input_image": image_b64
-    }
-    resp = requests.post(endpoint_url, headers=headers, json=payload)
-    if resp.status_code != 200:
-        logger.error(f"Azure OpenAI REST API error: {resp.text}")
-        raise RuntimeError(f"参考图生图失败: {resp.text}")
-    # 兼容异步任务API，需轮询获取结果
-    result_url = resp.json().get("resultUrl")
-    if not result_url:
-        raise RuntimeError("Azure API 未返回 resultUrl")
-    # 轮询直到生成完成
-    for _ in range(30):
-        r = requests.get(result_url, headers=headers)
-        if r.status_code == 200:
-            result = r.json()
-            if result.get("status") == "succeeded":
-                class Dummy:
-                    pass
-                dummy = Dummy()
-                dummy.data = [type("Obj", (), {"b64_json": result["data"][0]["b64_json"]})()]
-                return dummy
-            elif result.get("status") == "failed":
-                raise RuntimeError(f"Azure生成失败: {result}")
-        import time; time.sleep(2)
-    raise RuntimeError("Azure生成超时，请稍后重试")
+    # 参考图模式：使用官方 SDK 的 edit 接口，避免手动拼接 Azure REST 路径导致 404。
+    try:
+        return client.images.edit(
+            model=DEPLOYMENT,
+            image=reference_bytes,
+            prompt=prompt,
+            n=1,
+            size=size,
+        )
+    except Exception as e:
+        logger.error(f"images.edit failed. deployment={DEPLOYMENT}, error={e}")
+        raise RuntimeError(
+            "参考图生图失败：请确认 AZURE_OPENAI_DEPLOYMENT 指向支持编辑能力的图片模型部署（如 image-2），"
+            "并检查该部署在当前 Azure 资源中可用。"
+        )
 
 
 @app.route("/")
