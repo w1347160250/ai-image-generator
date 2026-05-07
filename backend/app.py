@@ -4,6 +4,7 @@ import logging
 import io
 import random
 import string
+import requests
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from flask import session, send_file
 from flask import Flask, request, jsonify, send_from_directory
@@ -74,6 +75,22 @@ if missing_settings:
 client = OpenAI(base_url=ENDPOINT, api_key=API_KEY)
 
 
+def _get_azure_resource_endpoint(raw_endpoint: str) -> str:
+    ep = raw_endpoint.strip().rstrip("/")
+    if ep.endswith("/openai/v1"):
+        return ep[: -len("/openai/v1")]
+    return ep
+
+
+def _wrap_b64_result(b64_value: str):
+    class Dummy:
+        pass
+
+    dummy = Dummy()
+    dummy.data = [type("Obj", (), {"b64_json": b64_value})()]
+    return dummy
+
+
 def _generate_with_optional_reference(prompt, size, quality, reference_bytes):
     if not reference_bytes:
         return client.images.generate(
@@ -93,12 +110,44 @@ def _generate_with_optional_reference(prompt, size, quality, reference_bytes):
             n=1,
             size=size,
         )
-    except Exception as e:
-        logger.error(f"images.edit failed. deployment={DEPLOYMENT}, error={e}")
-        raise RuntimeError(
-            "参考图生图失败：请确认 AZURE_OPENAI_DEPLOYMENT 指向支持编辑能力的图片模型部署（如 image-2），"
-            "并检查该部署在当前 Azure 资源中可用。"
-        )
+    except Exception as sdk_error:
+        logger.warning(f"images.edit via SDK failed. deployment={DEPLOYMENT}, error={sdk_error}")
+
+    # SDK 失败后，兜底使用 Azure deployment 路径调用 edits 接口。
+    resource_endpoint = _get_azure_resource_endpoint(ENDPOINT)
+    edit_url = (
+        f"{resource_endpoint}/openai/deployments/{DEPLOYMENT}/images/edits"
+        f"?api-version=2024-02-01"
+    )
+    headers = {"api-key": API_KEY}
+    files = {
+        "image": ("reference.png", reference_bytes, "image/png"),
+    }
+    data = {
+        "prompt": prompt,
+        "size": size,
+        "n": "1",
+    }
+
+    resp = requests.post(edit_url, headers=headers, data=data, files=files, timeout=60)
+    if resp.ok:
+        body = resp.json()
+        if body.get("data") and body["data"][0].get("b64_json"):
+            return _wrap_b64_result(body["data"][0]["b64_json"])
+
+    try:
+        err_text = resp.json()
+    except Exception:
+        err_text = resp.text
+
+    logger.error(
+        "images.edit fallback failed. "
+        f"deployment={DEPLOYMENT}, status={resp.status_code}, error={err_text}"
+    )
+    raise RuntimeError(
+        "参考图生图失败：当前部署可能不支持编辑，或部署名不是图片编辑部署名。"
+        f"（deployment={DEPLOYMENT}, status={resp.status_code}）"
+    )
 
 
 @app.route("/")
