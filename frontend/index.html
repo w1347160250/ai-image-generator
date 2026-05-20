@@ -25,13 +25,13 @@
         </div>
 
         <div class="form-group">
-            <label for="imageInput">参考图片（可选）</label>
-            <input id="imageInput" type="file" accept="image/*">
-            <p class="field-tip">上传后会结合这张图片和你的描述一起生成。</p>
+            <label for="imageInput">参考图片（可选，可多选）</label>
+            <input id="imageInput" type="file" accept="image/*" multiple>
+            <p class="field-tip">可一次上传多张图，AI 会结合这些图片和你的描述一起处理。</p>
         </div>
 
         <div id="previewArea" class="preview hidden">
-            <img id="previewImage" alt="参考图片预览">
+            <div id="previewGrid" class="preview-grid"></div>
             <button id="clearImageBtn" type="button" class="ghost-btn" onclick="clearSelectedImage()">移除参考图</button>
         </div>
 

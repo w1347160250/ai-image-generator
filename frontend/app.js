@@ -1,7 +1,7 @@
 const API_BASE = "";
 
 let currentImageUrl = null;
-let selectedFile = null;
+let selectedFiles = [];
 
 async function generateImage() {
 
@@ -30,13 +30,13 @@ async function generateImage() {
         const requestOptions = { method: "POST" };
 
 
-        if (selectedFile) {
+        if (selectedFiles.length > 0) {
             const formData = new FormData();
             formData.append("access_code", accessCode);
             formData.append("prompt", prompt);
             formData.append("size", size);
             formData.append("quality", quality);
-            formData.append("image", selectedFile);
+            selectedFiles.forEach((file) => formData.append("images", file));
             requestOptions.body = formData;
         } else {
             requestOptions.headers = { "Content-Type": "application/json" };
@@ -65,31 +65,41 @@ async function generateImage() {
 }
 
 function handleImageSelected(event) {
-    const file = event.target.files && event.target.files[0];
-    if (!file) {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) {
         clearSelectedImage();
         return;
     }
 
-    if (!file.type.startsWith("image/")) {
-        showError("请上传图片文件");
+    const invalid = files.find((file) => !file.type.startsWith("image/"));
+    if (invalid) {
+        showError("仅支持上传图片文件");
         clearSelectedImage();
         return;
     }
 
-    selectedFile = file;
-    const reader = new FileReader();
-    reader.onload = () => {
-        document.getElementById("previewImage").src = reader.result;
-        document.getElementById("previewArea").classList.remove("hidden");
-    };
-    reader.readAsDataURL(file);
+    selectedFiles = files;
+    const grid = document.getElementById("previewGrid");
+    grid.innerHTML = "";
+
+    selectedFiles.forEach((file, index) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const item = document.createElement("div");
+            item.className = "preview-item";
+            item.innerHTML = `<img src="${reader.result}" alt="参考图 ${index + 1}"><span>${file.name}</span>`;
+            grid.appendChild(item);
+        };
+        reader.readAsDataURL(file);
+    });
+
+    document.getElementById("previewArea").classList.remove("hidden");
 }
 
 function clearSelectedImage() {
-    selectedFile = null;
+    selectedFiles = [];
     document.getElementById("imageInput").value = "";
-    document.getElementById("previewImage").src = "";
+    document.getElementById("previewGrid").innerHTML = "";
     document.getElementById("previewArea").classList.add("hidden");
 }
 

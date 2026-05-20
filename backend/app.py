@@ -1,13 +1,17 @@
 import base64
+import io
 import os
 import logging
 import uuid
+import time
 from datetime import datetime, timedelta
 import requests
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from openai import OpenAI
 from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
+from openai import BadRequestError, RateLimitError
+from PIL import Image
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -49,6 +53,9 @@ if missing_settings:
     )
 
 client = OpenAI(base_url=ENDPOINT, api_key=API_KEY)
+
+MAX_UPLOAD_IMAGES = 8
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 def _extract_from_connection_string(connection_string: str):
@@ -168,6 +175,70 @@ def _wrap_b64_result(b64_value: str):
     dummy = Dummy()
     dummy.data = [type("Obj", (), {"b64_json": b64_value})()]
     return dummy
+
+
+def _normalize_to_png_bytes(image_bytes: bytes) -> bytes:
+    """Normalize uploaded images to RGB PNG to avoid mode/format incompatibility."""
+    if not image_bytes:
+        raise ValueError("上传图片为空")
+
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            converted = img.convert("RGB")
+            output = io.BytesIO()
+            converted.save(output, format="PNG")
+            return output.getvalue()
+    except Exception as exc:
+        raise ValueError(f"图片解析失败，请上传有效图片文件: {exc}") from exc
+
+
+def _build_image_files_for_edit(image_bytes_list):
+    image_files = []
+    for index, image_bytes in enumerate(image_bytes_list, start=1):
+        image_file = io.BytesIO(image_bytes)
+        image_file.name = f"source_image_{index}.png"
+        image_files.append(image_file)
+    return image_files
+
+
+def _generate_with_uploaded_images(prompt, size, quality, image_bytes_list):
+    if not image_bytes_list:
+        return client.images.generate(
+            model=DEPLOYMENT,
+            prompt=prompt,
+            n=1,
+            size=size,
+            quality=quality,
+        )
+
+    retries = 3
+    delay_seconds = 2
+    last_error = None
+    for attempt in range(1, retries + 1):
+        image_files = _build_image_files_for_edit(image_bytes_list)
+        try:
+            return client.images.edit(
+                model=DEPLOYMENT,
+                image=image_files,
+                prompt=prompt,
+                n=1,
+                size=size,
+                quality=quality,
+            )
+        except RateLimitError as err:
+            last_error = err
+            if attempt == retries:
+                raise RuntimeError("服务当前较忙，请稍后重试。") from err
+            time.sleep(delay_seconds * attempt)
+        except BadRequestError as err:
+            raise RuntimeError(
+                "上传图片格式或内容不符合要求，请尝试更换图片（建议 JPG/PNG）后重试。"
+            ) from err
+        finally:
+            for image_file in image_files:
+                image_file.close()
+
+    raise RuntimeError(f"图片生成失败: {last_error}")
 
 
 def _generate_with_optional_reference(prompt, size, quality, reference_bytes, reference_url=None):
@@ -330,25 +401,48 @@ def generate_image():
     if quality not in allowed_qualities:
         return jsonify({"error": f"不支持的质量，可选: {', '.join(allowed_qualities)}"}), 400
 
-    reference_bytes = None
+    uploaded_image_bytes_list = []
     reference_url = None
-    if is_multipart and "image" in request.files:
-        image_file = request.files["image"]
-        if image_file.filename:
+    if is_multipart:
+        files = request.files.getlist("images")
+        if not files and "image" in request.files:
+            files = [request.files["image"]]
+
+        if len(files) > MAX_UPLOAD_IMAGES:
+            return jsonify({"error": f"最多上传 {MAX_UPLOAD_IMAGES} 张参考图"}), 400
+
+        for image_file in files:
+            if not image_file or not image_file.filename:
+                continue
             if not (image_file.mimetype or "").startswith("image/"):
-                return jsonify({"error": "参考图必须是图片文件"}), 400
-            reference_bytes = image_file.read()
-            if not reference_bytes:
-                return jsonify({"error": "上传的参考图为空"}), 400
-            if len(reference_bytes) > 10 * 1024 * 1024:
-                return jsonify({"error": "参考图不能超过 10MB"}), 400
-            reference_url = _upload_reference_to_blob(reference_bytes)
+                return jsonify({"error": "上传文件中包含非图片内容"}), 400
+            raw_bytes = image_file.read()
+            if not raw_bytes:
+                return jsonify({"error": "上传的图片为空"}), 400
+            if len(raw_bytes) > MAX_IMAGE_BYTES:
+                return jsonify({"error": "单张参考图不能超过 10MB"}), 400
+
+            try:
+                normalized = _normalize_to_png_bytes(raw_bytes)
+            except ValueError as ve:
+                return jsonify({"error": str(ve)}), 400
+            uploaded_image_bytes_list.append(normalized)
+
+        if uploaded_image_bytes_list:
+            # Keep one short-lived URL for debugging / traceability on response.
+            reference_url = _upload_reference_to_blob(uploaded_image_bytes_list[0])
 
     try:
-        result = _generate_with_optional_reference(prompt, size, quality, reference_bytes, reference_url)
+        result = _generate_with_uploaded_images(prompt, size, quality, uploaded_image_bytes_list)
         image_bytes = _extract_image_bytes(result)
         blob_url = _upload_to_blob(image_bytes)
-        return jsonify({"image_url": blob_url, "reference_url": reference_url})
+        return jsonify(
+            {
+                "image_url": blob_url,
+                "reference_url": reference_url,
+                "input_image_count": len(uploaded_image_bytes_list),
+            }
+        )
     except RuntimeError as re:
         return jsonify({"error": str(re), "reference_url": reference_url}), 400
     except Exception as e:
