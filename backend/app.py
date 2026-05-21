@@ -52,7 +52,12 @@ if missing_settings:
         f"请设置环境变量: {', '.join(missing_settings)}"
     )
 
-client = OpenAI(base_url=ENDPOINT, api_key=API_KEY)
+client = OpenAI(
+    base_url=ENDPOINT,
+    api_key=API_KEY,
+    timeout=300.0,
+    max_retries=2,
+)
 
 MAX_UPLOAD_IMAGES = 8
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
