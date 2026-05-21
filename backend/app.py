@@ -217,13 +217,14 @@ def _generate_with_uploaded_images(prompt, size, quality, image_bytes_list):
     for attempt in range(1, retries + 1):
         image_files = _build_image_files_for_edit(image_bytes_list)
         try:
+            # Single image: pass file object directly; multiple: pass list
+            image_arg = image_files[0] if len(image_files) == 1 else image_files
             return client.images.edit(
                 model=DEPLOYMENT,
-                image=image_files,
+                image=image_arg,
                 prompt=prompt,
                 n=1,
                 size=size,
-                quality=quality,
             )
         except RateLimitError as err:
             last_error = err
@@ -231,8 +232,9 @@ def _generate_with_uploaded_images(prompt, size, quality, image_bytes_list):
                 raise RuntimeError("服务当前较忙，请稍后重试。") from err
             time.sleep(delay_seconds * attempt)
         except BadRequestError as err:
+            logger.error(f"images.edit BadRequest: {err}")
             raise RuntimeError(
-                "上传图片格式或内容不符合要求，请尝试更换图片（建议 JPG/PNG）后重试。"
+                f"图片处理失败: {err.message if hasattr(err, 'message') else str(err)}"
             ) from err
         finally:
             for image_file in image_files:
