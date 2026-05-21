@@ -1,9 +1,10 @@
 import base64
 from openai import OpenAI
 
-endpoint = "https://bc-gpt-test.services.ai.azure.com/openai/v1"
-deployment_name = "gpt-image-2"
 import os
+
+endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "https://bc-gpt-test.services.ai.azure.com/openai/v1")
+deployment_name = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-image-2")
 api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
 
 client = OpenAI(
