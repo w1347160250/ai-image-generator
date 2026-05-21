@@ -428,9 +428,12 @@ def generate_image():
                 return jsonify({"error": str(ve)}), 400
             uploaded_image_bytes_list.append(normalized)
 
-        if uploaded_image_bytes_list:
-            # Keep one short-lived URL for debugging / traceability on response.
-            reference_url = _upload_reference_to_blob(uploaded_image_bytes_list[0])
+        reference_urls = []
+        for img_bytes in uploaded_image_bytes_list:
+            ref_url = _upload_reference_to_blob(img_bytes)
+            reference_urls.append(ref_url)
+        if reference_urls:
+            reference_url = reference_urls[0]
 
     try:
         result = _generate_with_uploaded_images(prompt, size, quality, uploaded_image_bytes_list)
@@ -440,6 +443,7 @@ def generate_image():
             {
                 "image_url": blob_url,
                 "reference_url": reference_url,
+                "reference_urls": reference_urls if reference_urls else None,
                 "input_image_count": len(uploaded_image_bytes_list),
             }
         )

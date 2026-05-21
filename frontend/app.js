@@ -103,13 +103,22 @@ function clearSelectedImage() {
     document.getElementById("previewArea").classList.add("hidden");
 }
 
-function downloadImage() {
+async function downloadImage() {
     if (!currentImageUrl) return;
-    const link = document.createElement("a");
-    link.href = currentImageUrl;
-    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    link.download = `ai-image-${ts}.png`;
-    link.click();
+    try {
+        const resp = await fetch(currentImageUrl);
+        const blob = await resp.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = blobUrl;
+        const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        link.download = `ai-image-${ts}.png`;
+        link.click();
+        URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+        // Fallback: open in new tab if fetch fails due to CORS
+        window.open(currentImageUrl, "_blank");
+    }
 }
 
 function showLoading() {
