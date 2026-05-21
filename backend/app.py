@@ -4,6 +4,7 @@ import os
 import logging
 import uuid
 import time
+import threading
 from datetime import datetime, timedelta
 import requests
 from flask import Flask, request, jsonify, send_from_directory
@@ -377,6 +378,27 @@ def health_check():
     return jsonify({"status": "ok", "deployment": DEPLOYMENT})
 
 
+# --- Async task infrastructure ---
+_tasks = {}  # task_id -> {status, result, error, ...}
+_tasks_lock = threading.Lock()
+
+
+def _run_generate_task(task_id, prompt, size, quality, uploaded_image_bytes_list):
+    """Background worker that generates image and updates task store."""
+    try:
+        result = _generate_with_uploaded_images(prompt, size, quality, uploaded_image_bytes_list)
+        image_bytes = _extract_image_bytes(result)
+        blob_url = _upload_to_blob(image_bytes)
+        with _tasks_lock:
+            _tasks[task_id]["status"] = "completed"
+            _tasks[task_id]["image_url"] = blob_url
+    except Exception as exc:
+        logger.error(f"Task {task_id} failed: {exc}")
+        with _tasks_lock:
+            _tasks[task_id]["status"] = "failed"
+            _tasks[task_id]["error"] = str(exc)
+
+
 @app.route("/api/generate", methods=["POST"])
 def generate_image():
 
@@ -410,6 +432,7 @@ def generate_image():
 
     uploaded_image_bytes_list = []
     reference_url = None
+    reference_urls = []
     if is_multipart:
         files = request.files.getlist("images")
         if not files and "image" in request.files:
@@ -435,29 +458,41 @@ def generate_image():
                 return jsonify({"error": str(ve)}), 400
             uploaded_image_bytes_list.append(normalized)
 
-        reference_urls = []
         for img_bytes in uploaded_image_bytes_list:
             ref_url = _upload_reference_to_blob(img_bytes)
             reference_urls.append(ref_url)
         if reference_urls:
             reference_url = reference_urls[0]
 
-    try:
-        result = _generate_with_uploaded_images(prompt, size, quality, uploaded_image_bytes_list)
-        image_bytes = _extract_image_bytes(result)
-        blob_url = _upload_to_blob(image_bytes)
-        return jsonify(
-            {
-                "image_url": blob_url,
-                "reference_url": reference_url,
-                "reference_urls": reference_urls if reference_urls else None,
-                "input_image_count": len(uploaded_image_bytes_list),
-            }
-        )
-    except RuntimeError as re:
-        return jsonify({"error": str(re), "reference_url": reference_url}), 400
-    except Exception as e:
-        return jsonify({"error": f"生成失败: {str(e)}", "reference_url": reference_url}), 500
+    # Create async task and return immediately
+    task_id = uuid.uuid4().hex
+    with _tasks_lock:
+        _tasks[task_id] = {
+            "status": "processing",
+            "reference_url": reference_url,
+            "reference_urls": reference_urls or None,
+            "input_image_count": len(uploaded_image_bytes_list),
+            "image_url": None,
+            "error": None,
+        }
+
+    thread = threading.Thread(
+        target=_run_generate_task,
+        args=(task_id, prompt, size, quality, uploaded_image_bytes_list),
+        daemon=True,
+    )
+    thread.start()
+
+    return jsonify({"task_id": task_id, "status": "processing"}), 202
+
+
+@app.route("/api/task/<task_id>", methods=["GET"])
+def get_task_status(task_id):
+    with _tasks_lock:
+        task = _tasks.get(task_id)
+    if not task:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify({"task_id": task_id, **task})
 
 
 if __name__ == "__main__":

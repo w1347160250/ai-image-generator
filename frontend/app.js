@@ -50,21 +50,29 @@ async function generateImage() {
         if (contentType.includes("application/json")) {
             data = await resp.json();
         } else {
-            const text = await resp.text();
-            if (resp.ok) {
-                throw new Error("服务器返回了非预期的响应格式，请稍后重试。");
-            }
             throw new Error(`服务器错误 (${resp.status})：可能是请求超时，请稍后重试。`);
         }
 
-        if (!resp.ok) {
+        if (!resp.ok && resp.status !== 202) {
             throw new Error(data.error || "生成失败");
         }
 
-        currentImageUrl = data.image_url;
-        const img = document.getElementById("resultImage");
-        img.src = data.image_url;
-        showResult();
+        // Async task: poll for result
+        if (data.task_id) {
+            document.querySelector("#loading p").textContent = "AI 正在生成图片，请耐心等待...";
+            const result = await pollTask(data.task_id);
+            if (result.status === "completed" && result.image_url) {
+                currentImageUrl = result.image_url;
+                document.getElementById("resultImage").src = result.image_url;
+                showResult();
+            } else {
+                throw new Error(result.error || "生成失败，请重试。");
+            }
+        } else if (data.image_url) {
+            currentImageUrl = data.image_url;
+            document.getElementById("resultImage").src = data.image_url;
+            showResult();
+        }
     } catch (err) {
         showError(err.message);
     } finally {
@@ -161,3 +169,23 @@ document.getElementById("prompt").addEventListener("keydown", (e) => {
 });
 
 document.getElementById("imageInput").addEventListener("change", handleImageSelected);
+
+async function pollTask(taskId) {
+    const maxAttempts = 120;  // 10 minutes max (120 * 5s)
+    for (let i = 0; i < maxAttempts; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+            const resp = await fetch(`${API_BASE}/api/task/${taskId}`);
+            const task = await resp.json();
+            if (task.status === "completed" || task.status === "failed") {
+                return task;
+            }
+            // Update loading text with elapsed time
+            const elapsed = (i + 1) * 5;
+            document.querySelector("#loading p").textContent = `AI 正在生成图片，已等待 ${elapsed} 秒...`;
+        } catch (err) {
+            // Network error, keep polling
+        }
+    }
+    return { status: "failed", error: "生成超时，请稍后重试。" };
+}
