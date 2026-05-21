@@ -45,7 +45,17 @@ async function generateImage() {
 
         const resp = await fetch(`${API_BASE}/api/generate`, requestOptions);
 
-        const data = await resp.json();
+        let data;
+        const contentType = resp.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+            data = await resp.json();
+        } else {
+            const text = await resp.text();
+            if (resp.ok) {
+                throw new Error("服务器返回了非预期的响应格式，请稍后重试。");
+            }
+            throw new Error(`服务器错误 (${resp.status})：可能是请求超时，请稍后重试。`);
+        }
 
         if (!resp.ok) {
             throw new Error(data.error || "生成失败");
