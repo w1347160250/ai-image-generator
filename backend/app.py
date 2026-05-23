@@ -2,6 +2,7 @@ import base64
 import io
 import os
 import logging
+import re
 import uuid
 import time
 import threading
@@ -92,7 +93,23 @@ def _extract_image_bytes(result):
     raise RuntimeError("模型未返回 b64_json 或 url")
 
 
-def _upload_to_blob(image_bytes: bytes):
+def _build_prompt_slug(prompt: str, fallback: str = "image") -> str:
+    normalized = (prompt or "").strip().lower()
+    normalized = re.sub(r"\s+", "-", normalized)
+    normalized = re.sub(r"[^0-9a-z\u4e00-\u9fff_-]", "", normalized)
+    normalized = normalized.strip("-_")
+    return (normalized[:24] or fallback)
+
+
+def _build_blob_filename(prompt: str, prefix: str, index: int | None = None) -> str:
+    prompt_slug = _build_prompt_slug(prompt, fallback=prefix)
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    short_id = uuid.uuid4().hex[:8]
+    index_part = f"-{index}" if index is not None else ""
+    return f"{prefix}-{prompt_slug}{index_part}-{timestamp}-{short_id}.png"
+
+
+def _upload_to_blob(image_bytes: bytes, prompt: str):
     if not AZURE_STORAGE_CONNECTION_STRING or not AZURE_STORAGE_CONTAINER_GENERATED:
         raise RuntimeError(
             "请配置 AZURE_STORAGE_CONNECTION_STRING 和 AZURE_STORAGE_CONTAINER_GENERATED"
@@ -103,7 +120,8 @@ def _upload_to_blob(image_bytes: bytes):
     if not container_client.exists():
         container_client.create_container()
 
-    blob_name = f"generated/{datetime.utcnow().strftime('%Y%m%d')}/{uuid.uuid4().hex}.png"
+    blob_filename = _build_blob_filename(prompt, prefix="gen")
+    blob_name = f"generated/{datetime.utcnow().strftime('%Y%m%d')}/{blob_filename}"
     blob_client = container_client.get_blob_client(blob_name)
     blob_client.upload_blob(
         image_bytes,
@@ -129,7 +147,7 @@ def _upload_to_blob(image_bytes: bytes):
     return blob_client.url
 
 
-def _upload_reference_to_blob(image_bytes: bytes):
+def _upload_reference_to_blob(image_bytes: bytes, prompt: str, index: int):
     if not AZURE_STORAGE_CONNECTION_STRING or not AZURE_STORAGE_CONTAINER_REFERENCE:
         raise RuntimeError(
             "请配置 AZURE_STORAGE_CONNECTION_STRING 和 AZURE_STORAGE_CONTAINER_REFERENCE"
@@ -140,8 +158,8 @@ def _upload_reference_to_blob(image_bytes: bytes):
     if not container_client.exists():
         container_client.create_container()
 
-    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    blob_name = f"reference/{datetime.utcnow().strftime('%Y%m%d')}/{ts}-{uuid.uuid4().hex}.png"
+    blob_filename = _build_blob_filename(prompt, prefix="ref", index=index)
+    blob_name = f"reference/{datetime.utcnow().strftime('%Y%m%d')}/{blob_filename}"
     blob_client = container_client.get_blob_client(blob_name)
     blob_client.upload_blob(
         image_bytes,
@@ -417,10 +435,11 @@ def _run_generate_task(task_id, prompt, size, quality, uploaded_image_bytes_list
     try:
         result = _generate_with_uploaded_images(prompt, size, quality, uploaded_image_bytes_list)
         image_bytes = _extract_image_bytes(result)
-        blob_url = _upload_to_blob(image_bytes)
+        blob_url = _upload_to_blob(image_bytes, prompt)
         with _tasks_lock:
             _tasks[task_id]["status"] = "completed"
             _tasks[task_id]["image_url"] = blob_url
+            _tasks[task_id]["image_name"] = blob_url.split("?")[0].rsplit("/", 1)[-1]
     except Exception as exc:
         logger.error(f"Task {task_id} failed: {exc}")
         with _tasks_lock:
@@ -487,8 +506,8 @@ def generate_image():
                 return jsonify({"error": str(ve)}), 400
             uploaded_image_bytes_list.append(normalized)
 
-        for img_bytes in uploaded_image_bytes_list:
-            ref_url = _upload_reference_to_blob(img_bytes)
+        for index, img_bytes in enumerate(uploaded_image_bytes_list, start=1):
+            ref_url = _upload_reference_to_blob(img_bytes, prompt, index)
             reference_urls.append(ref_url)
         if reference_urls:
             reference_url = reference_urls[0]
@@ -502,6 +521,7 @@ def generate_image():
             "reference_urls": reference_urls or None,
             "input_image_count": len(uploaded_image_bytes_list),
             "image_url": None,
+            "image_name": None,
             "error": None,
         }
 
