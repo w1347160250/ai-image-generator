@@ -207,15 +207,46 @@ def _build_image_files_for_edit(image_bytes_list):
     return image_files
 
 
+def _format_bad_request_error(err: BadRequestError) -> str:
+    body = getattr(err, "body", None)
+    message = getattr(err, "message", None) or str(err)
+    code = None
+    request_id = None
+
+    if isinstance(body, dict):
+        error = body.get("error") or {}
+        code = error.get("code")
+        message = error.get("message") or message
+
+    response = getattr(err, "response", None)
+    if response is not None:
+        request_id = response.headers.get("x-request-id") or response.headers.get("apim-request-id")
+
+    lowered = (message or "").lower()
+    if code == "moderation_blocked" or "rejected by the safety system" in lowered:
+        suffix = f"（request_id: {request_id}）" if request_id else ""
+        return (
+            "请求被安全系统拦截，请调整提示词或更换参考图后重试。"
+            "建议避免涉及敏感人物改造、未成年人、暴力、成人化等高风险描述。"
+            f"{suffix}"
+        )
+
+    return f"图片处理失败: {message}"
+
+
 def _generate_with_uploaded_images(prompt, size, quality, image_bytes_list):
     if not image_bytes_list:
-        return client.images.generate(
-            model=DEPLOYMENT,
-            prompt=prompt,
-            n=1,
-            size=size,
-            quality=quality,
-        )
+        try:
+            return client.images.generate(
+                model=DEPLOYMENT,
+                prompt=prompt,
+                n=1,
+                size=size,
+                quality=quality,
+            )
+        except BadRequestError as err:
+            logger.error(f"images.generate BadRequest: {err}")
+            raise RuntimeError(_format_bad_request_error(err)) from err
 
     retries = 3
     delay_seconds = 2
@@ -239,9 +270,7 @@ def _generate_with_uploaded_images(prompt, size, quality, image_bytes_list):
             time.sleep(delay_seconds * attempt)
         except BadRequestError as err:
             logger.error(f"images.edit BadRequest: {err}")
-            raise RuntimeError(
-                f"图片处理失败: {err.message if hasattr(err, 'message') else str(err)}"
-            ) from err
+            raise RuntimeError(_format_bad_request_error(err)) from err
         finally:
             for image_file in image_files:
                 image_file.close()
