@@ -28,4 +28,4 @@ image_bytes = base64.b64decode(img.data[0].b64_json)
 with open("output.png", "wb") as out:
     out.write(image_bytes)
 
-print("✅ output.png 已生成")
+print("✅ output.png 已生成了")
