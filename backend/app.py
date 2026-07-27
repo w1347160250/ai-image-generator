@@ -8,12 +8,17 @@ import time
 import threading
 from datetime import datetime, timedelta
 import requests
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, session
 from flask_cors import CORS
 from openai import OpenAI
 from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
 from openai import BadRequestError, RateLimitError
 from PIL import Image
+
+try:
+    from backend import auth as auth_module
+except ModuleNotFoundError:
+    import auth as auth_module
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -22,6 +27,7 @@ logger = logging.getLogger("app")
 ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "").strip()
 DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-image-2").strip()
 API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "").strip()
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "").strip()
 AZURE_STORAGE_CONNECTION_STRING = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "").strip()
 AZURE_STORAGE_CONTAINER = os.environ.get("AZURE_STORAGE_CONTAINER", "").strip()
 AZURE_STORAGE_CONTAINER_GENERATED = os.environ.get(
@@ -48,11 +54,16 @@ if not ENDPOINT:
     missing_settings.append("AZURE_OPENAI_ENDPOINT")
 if not API_KEY:
     missing_settings.append("AZURE_OPENAI_API_KEY")
+if not SESSION_SECRET:
+    missing_settings.append("SESSION_SECRET")
 
 if missing_settings:
     raise RuntimeError(
         f"请设置环境变量: {', '.join(missing_settings)}"
     )
+
+app.secret_key = SESSION_SECRET
+app.register_blueprint(auth_module.auth_bp)
 
 client = OpenAI(
     base_url=ENDPOINT,
@@ -63,6 +74,15 @@ client = OpenAI(
 
 MAX_UPLOAD_IMAGES = 8
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+def is_request_authorized(getf) -> bool:
+    """允许 AAD 登录态或现有访问口令中的任意一种鉴权方式。"""
+    if session.get("aad_user"):
+        return True
+
+    access_code = (getf("access_code", "") or "").strip()
+    return bool(access_code) and access_code == ACCESS_CODE
 
 
 def _extract_from_connection_string(connection_string: str):
@@ -272,7 +292,6 @@ def _generate_with_uploaded_images(prompt, size, quality, image_bytes_list):
     for attempt in range(1, retries + 1):
         image_files = _build_image_files_for_edit(image_bytes_list)
         try:
-            # Single image: pass file object directly; multiple: pass list
             image_arg = image_files[0] if len(image_files) == 1 else image_files
             return client.images.edit(
                 model=DEPLOYMENT,
@@ -306,7 +325,6 @@ def _generate_with_optional_reference(prompt, size, quality, reference_bytes, re
             quality=quality,
         )
 
-    # 先尝试 URL 参考图生图（适配 image-2 URL 参考流程）。
     if reference_url:
         resource_endpoint = _get_azure_resource_endpoint(ENDPOINT)
         headers = {
@@ -365,7 +383,6 @@ def _generate_with_optional_reference(prompt, size, quality, reference_bytes, re
                 f"deployment={DEPLOYMENT}, reference_url={reference_url}, attempts={url_attempt_errors}"
             )
 
-    # URL 流程失败后，回退到编辑接口（字节流）保证兼容性。
     try:
         return client.images.edit(
             model=DEPLOYMENT,
@@ -377,7 +394,6 @@ def _generate_with_optional_reference(prompt, size, quality, reference_bytes, re
     except Exception as sdk_error:
         logger.warning(f"images.edit via SDK failed. deployment={DEPLOYMENT}, error={sdk_error}")
 
-    # SDK 失败后，兜底使用 Azure deployment 路径调用 edits 接口。
     resource_endpoint = _get_azure_resource_endpoint(ENDPOINT)
     edit_url = (
         f"{resource_endpoint}/openai/deployments/{DEPLOYMENT}/images/edits"
@@ -425,8 +441,7 @@ def health_check():
     return jsonify({"status": "ok", "deployment": DEPLOYMENT})
 
 
-# --- Async task infrastructure ---
-_tasks = {}  # task_id -> {status, result, error, ...}
+_tasks = {}
 _tasks_lock = threading.Lock()
 
 
@@ -459,9 +474,7 @@ def generate_image():
             return jsonify({"error": "请求格式错误"}), 400
         getf = lambda k, d=None: (data.get(k, d) or d)
 
-    # 校验口令
-    access_code = getf("access_code", "").strip()
-    if not access_code or access_code != ACCESS_CODE:
+    if not is_request_authorized(getf):
         return jsonify({"error": "访问口令错误"}), 403
 
     prompt = getf("prompt", "").strip()
@@ -512,7 +525,6 @@ def generate_image():
         if reference_urls:
             reference_url = reference_urls[0]
 
-    # Create async task and return immediately
     task_id = uuid.uuid4().hex
     with _tasks_lock:
         _tasks[task_id] = {

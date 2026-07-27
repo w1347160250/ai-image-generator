@@ -8,16 +8,27 @@
 </head>
 <body>
     <div class="container">
+        <h1>🎨 AI 图片生成器</h1>
+        <p class="subtitle">使用 Microsoft 登录或访问口令，AI 为你生成图片</p>
 
-            <h1>🎨 AI 图片生成器</h1>
-            <p class="subtitle">输入口令，AI 为你生成图片</p>
-
-            <div class="form-row">
-                <div class="form-group" style="flex:1;min-width:120px;">
-                    <label for="accessCode">访问口令</label>
-                    <input id="accessCode" type="password" placeholder="请输入访问口令">
-                </div>
+        <section class="auth-panel" aria-labelledby="authTitle">
+            <div class="auth-copy">
+                <strong id="authTitle">Microsoft Entra ID</strong>
+                <span id="authStatus" class="auth-status">正在检查登录状态...</span>
             </div>
+            <div class="auth-actions">
+                <a id="loginBtn" class="microsoft-btn hidden" href="/api/auth/login">使用 Microsoft 登录</a>
+                <button id="logoutBtn" type="button" class="ghost-btn compact-btn hidden" onclick="logoutMicrosoft()">退出登录</button>
+            </div>
+        </section>
+
+        <div id="accessCodeGroup" class="form-row">
+            <div class="form-group" style="flex:1;min-width:120px;">
+                <label for="accessCode">访问口令</label>
+                <input id="accessCode" type="password" placeholder="未使用 Microsoft 登录时请输入访问口令">
+                <p class="field-tip">你也可以不登录 Microsoft，继续使用原来的访问口令。</p>
+            </div>
+        </div>
 
         <div class="form-group">
             <label for="prompt">图片描述</label>

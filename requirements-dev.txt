@@ -1,0 +1,3 @@
+# 开发/测试依赖（不用于生产运行时）
+# 安装：pip install -r backend/requirements.txt -r requirements-dev.txt
+pytest
