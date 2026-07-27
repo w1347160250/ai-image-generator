@@ -2,13 +2,78 @@ const API_BASE = "";
 
 let currentImageUrl = null;
 let selectedFiles = [];
+let isMicrosoftAuthenticated = false;
+
+async function loadAuthStatus() {
+    const status = document.getElementById("authStatus");
+    const loginBtn = document.getElementById("loginBtn");
+    const logoutBtn = document.getElementById("logoutBtn");
+    const accessCodeGroup = document.getElementById("accessCodeGroup");
+
+    try {
+        const resp = await fetch(`${API_BASE}/api/auth/status`, {
+            credentials: "same-origin",
+        });
+        if (!resp.ok) {
+            throw new Error("无法读取登录状态");
+        }
+
+        const data = await resp.json();
+        isMicrosoftAuthenticated = Boolean(data.authenticated);
+
+        if (isMicrosoftAuthenticated) {
+            const user = data.user || {};
+            const displayName = user.name || user.username || "Microsoft 用户";
+            status.textContent = `已登录：${displayName}`;
+            status.classList.add("authenticated");
+            loginBtn.classList.add("hidden");
+            logoutBtn.classList.remove("hidden");
+            accessCodeGroup.classList.add("hidden");
+        } else {
+            showLoggedOutState();
+        }
+    } catch (err) {
+        isMicrosoftAuthenticated = false;
+        status.textContent = "Microsoft 登录状态暂不可用，可继续使用访问口令";
+        status.classList.remove("authenticated");
+        loginBtn.classList.remove("hidden");
+        logoutBtn.classList.add("hidden");
+        accessCodeGroup.classList.remove("hidden");
+    }
+}
+
+function showLoggedOutState() {
+    isMicrosoftAuthenticated = false;
+    const status = document.getElementById("authStatus");
+    status.textContent = "尚未登录，可使用 Microsoft 登录或访问口令";
+    status.classList.remove("authenticated");
+    document.getElementById("loginBtn").classList.remove("hidden");
+    document.getElementById("logoutBtn").classList.add("hidden");
+    document.getElementById("accessCodeGroup").classList.remove("hidden");
+}
+
+async function logoutMicrosoft() {
+    hideError();
+    try {
+        const resp = await fetch(`${API_BASE}/api/auth/logout`, {
+            method: "POST",
+            credentials: "same-origin",
+        });
+        if (!resp.ok) {
+            throw new Error("退出登录失败，请稍后重试");
+        }
+        document.getElementById("accessCode").value = "";
+        showLoggedOutState();
+    } catch (err) {
+        showError(err.message);
+    }
+}
 
 async function generateImage() {
-
     const accessCode = document.getElementById("accessCode").value.trim();
     const prompt = document.getElementById("prompt").value.trim();
-    if (!accessCode) {
-        showError("请输入访问口令");
+    if (!isMicrosoftAuthenticated && !accessCode) {
+        showError("请先使用 Microsoft 登录，或输入访问口令");
         return;
     }
     if (!prompt) {
@@ -27,12 +92,14 @@ async function generateImage() {
     btn.textContent = "生成中...";
 
     try {
-        const requestOptions = { method: "POST" };
-
+        const requestOptions = {
+            method: "POST",
+            credentials: "same-origin",
+        };
 
         if (selectedFiles.length > 0) {
             const formData = new FormData();
-            formData.append("access_code", accessCode);
+            if (accessCode) formData.append("access_code", accessCode);
             formData.append("prompt", prompt);
             formData.append("size", size);
             formData.append("quality", quality);
@@ -57,7 +124,6 @@ async function generateImage() {
             throw new Error(data.error || "生成失败");
         }
 
-        // Async task: poll for result
         if (data.task_id) {
             document.querySelector("#loading p").textContent = "AI 正在生成图片，请耐心等待...";
             const result = await pollTask(data.task_id);
@@ -134,7 +200,6 @@ async function downloadImage() {
         link.click();
         URL.revokeObjectURL(blobUrl);
     } catch (err) {
-        // Fallback: open in new tab if fetch fails due to CORS
         window.open(currentImageUrl, "_blank");
     }
 }
@@ -160,7 +225,6 @@ function hideResult() {
     document.getElementById("resultArea").classList.add("hidden");
 }
 
-// Enter 键触发生成
 document.getElementById("prompt").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -171,7 +235,7 @@ document.getElementById("prompt").addEventListener("keydown", (e) => {
 document.getElementById("imageInput").addEventListener("change", handleImageSelected);
 
 async function pollTask(taskId) {
-    const maxAttempts = 120;  // 10 minutes max (120 * 5s)
+    const maxAttempts = 120;
     for (let i = 0; i < maxAttempts; i++) {
         await new Promise((r) => setTimeout(r, 5000));
         try {
@@ -180,12 +244,13 @@ async function pollTask(taskId) {
             if (task.status === "completed" || task.status === "failed") {
                 return task;
             }
-            // Update loading text with elapsed time
             const elapsed = (i + 1) * 5;
             document.querySelector("#loading p").textContent = `AI 正在生成图片，已等待 ${elapsed} 秒...`;
         } catch (err) {
-            // Network error, keep polling
+            // 网络短暂异常时继续轮询。
         }
     }
     return { status: "failed", error: "生成超时，请稍后重试。" };
 }
+
+loadAuthStatus();
