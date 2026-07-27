@@ -1,8 +1,45 @@
 const API_BASE = "";
+const GENERATION_STATE_KEY = "aiImageGenerationState";
 
 let currentImageUrl = null;
 let selectedFiles = [];
 let isMicrosoftAuthenticated = false;
+let activePollingTaskId = null;
+
+function loadGenerationState() {
+    try {
+        const value = localStorage.getItem(GENERATION_STATE_KEY);
+        return value ? JSON.parse(value) : null;
+    } catch (err) {
+        return null;
+    }
+}
+
+function saveGenerationState(state) {
+    try {
+        localStorage.setItem(GENERATION_STATE_KEY, JSON.stringify({
+            ...state,
+            updatedAt: Date.now(),
+        }));
+    } catch (err) {
+        // Storage may be unavailable in private browsing; generation can still continue.
+    }
+}
+
+function clearGenerationState() {
+    try {
+        localStorage.removeItem(GENERATION_STATE_KEY);
+    } catch (err) {
+        // Nothing else is required when browser storage is unavailable.
+    }
+}
+
+function showGeneratedImage(imageUrl) {
+    currentImageUrl = imageUrl;
+    document.getElementById("resultImage").src = imageUrl;
+    showResult();
+    saveGenerationState({ imageUrl });
+}
 
 async function loadAuthStatus() {
     const status = document.getElementById("authStatus");
@@ -125,19 +162,10 @@ async function generateImage() {
         }
 
         if (data.task_id) {
-            document.querySelector("#loading p").textContent = "AI 正在生成图片，请耐心等待...";
-            const result = await pollTask(data.task_id);
-            if (result.status === "completed" && result.image_url) {
-                currentImageUrl = result.image_url;
-                document.getElementById("resultImage").src = result.image_url;
-                showResult();
-            } else {
-                throw new Error(result.error || "生成失败，请重试。");
-            }
+            saveGenerationState({ taskId: data.task_id });
+            await resumeTask(data.task_id);
         } else if (data.image_url) {
-            currentImageUrl = data.image_url;
-            document.getElementById("resultImage").src = data.image_url;
-            showResult();
+            showGeneratedImage(data.image_url);
         }
     } catch (err) {
         showError(err.message);
@@ -239,8 +267,13 @@ async function pollTask(taskId) {
     for (let i = 0; i < maxAttempts; i++) {
         await new Promise((r) => setTimeout(r, 5000));
         try {
-            const resp = await fetch(`${API_BASE}/api/task/${taskId}`);
+            const resp = await fetch(`${API_BASE}/api/task/${taskId}`, {
+                credentials: "same-origin",
+            });
             const task = await resp.json();
+            if (!resp.ok) {
+                return { status: "failed", error: task.error || "无法恢复生成任务。" };
+            }
             if (task.status === "completed" || task.status === "failed") {
                 return task;
             }
@@ -253,4 +286,51 @@ async function pollTask(taskId) {
     return { status: "failed", error: "生成超时，请稍后重试。" };
 }
 
+async function resumeTask(taskId) {
+    if (!taskId || activePollingTaskId === taskId) return;
+
+    activePollingTaskId = taskId;
+    const btn = document.getElementById("generateBtn");
+    hideError();
+    showLoading();
+    document.querySelector("#loading p").textContent = "正在恢复图片生成进度...";
+    btn.disabled = true;
+    btn.textContent = "生成中...";
+
+    try {
+        const result = await pollTask(taskId);
+        if (result.status === "completed" && result.image_url) {
+            showGeneratedImage(result.image_url);
+        } else {
+            clearGenerationState();
+            showError(result.error || "生成失败，请重试。");
+        }
+    } finally {
+        activePollingTaskId = null;
+        hideLoading();
+        btn.disabled = false;
+        btn.textContent = "生成图片";
+    }
+}
+
+function restoreGenerationState() {
+    const state = loadGenerationState();
+    if (!state) return;
+
+    if (state.imageUrl) {
+        showGeneratedImage(state.imageUrl);
+    } else if (state.taskId) {
+        resumeTask(state.taskId);
+    }
+}
+
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+        restoreGenerationState();
+    }
+});
+
+window.addEventListener("pageshow", restoreGenerationState);
+
 loadAuthStatus();
+restoreGenerationState();
