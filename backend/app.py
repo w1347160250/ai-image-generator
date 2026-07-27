@@ -8,7 +8,7 @@ import time
 import threading
 from datetime import datetime, timedelta
 import requests
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, session
 from flask_cors import CORS
 from openai import OpenAI
 from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
@@ -22,6 +22,7 @@ logger = logging.getLogger("app")
 ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "").strip()
 DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-image-2").strip()
 API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "").strip()
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "").strip()
 AZURE_STORAGE_CONNECTION_STRING = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "").strip()
 AZURE_STORAGE_CONTAINER = os.environ.get("AZURE_STORAGE_CONTAINER", "").strip()
 AZURE_STORAGE_CONTAINER_GENERATED = os.environ.get(
@@ -48,11 +49,15 @@ if not ENDPOINT:
     missing_settings.append("AZURE_OPENAI_ENDPOINT")
 if not API_KEY:
     missing_settings.append("AZURE_OPENAI_API_KEY")
+if not SESSION_SECRET:
+    missing_settings.append("SESSION_SECRET")
 
 if missing_settings:
     raise RuntimeError(
         f"请设置环境变量: {', '.join(missing_settings)}"
     )
+
+app.secret_key = SESSION_SECRET
 
 client = OpenAI(
     base_url=ENDPOINT,
@@ -63,6 +68,15 @@ client = OpenAI(
 
 MAX_UPLOAD_IMAGES = 8
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+def is_request_authorized(getf) -> bool:
+    """允许 AAD 登录态或现有访问口令中的任意一种鉴权方式。"""
+    if session.get("aad_user"):
+        return True
+
+    access_code = (getf("access_code", "") or "").strip()
+    return bool(access_code) and access_code == ACCESS_CODE
 
 
 def _extract_from_connection_string(connection_string: str):
@@ -459,9 +473,8 @@ def generate_image():
             return jsonify({"error": "请求格式错误"}), 400
         getf = lambda k, d=None: (data.get(k, d) or d)
 
-    # 校验口令
-    access_code = getf("access_code", "").strip()
-    if not access_code or access_code != ACCESS_CODE:
+    # 校验 AAD 登录态或现有访问口令
+    if not is_request_authorized(getf):
         return jsonify({"error": "访问口令错误"}), 403
 
     prompt = getf("prompt", "").strip()
