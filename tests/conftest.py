@@ -19,6 +19,7 @@ import pytest
 os.environ.setdefault("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com/openai/v1")
 os.environ.setdefault("AZURE_OPENAI_API_KEY", "test-key")
 os.environ.setdefault("AZURE_OPENAI_DEPLOYMENT", "gpt-image-2")
+os.environ.setdefault("SESSION_SECRET", "test-session-secret")
 # 固定访问口令，便于断言。
 os.environ.setdefault("ACCESS_CODE", "test-code")
 
