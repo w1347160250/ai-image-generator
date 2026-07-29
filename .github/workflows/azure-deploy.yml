@@ -1,4 +1,4 @@
-name: Deploy to Azure Web App
+name: AIG - Deploy Azure (Publish Profile)
 
 on:
   push:
@@ -7,6 +7,7 @@ on:
 
 jobs:
   deploy:
+    name: Deploy via Publish Profile
     runs-on: ubuntu-latest
 
     steps:
@@ -23,7 +24,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Deploy to Azure Web App
+      - name: Deploy to Azure App Service
         uses: azure/webapps-deploy@v3
         with:
           app-name: tepmimages
